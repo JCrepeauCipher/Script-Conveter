@@ -3,9 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PROMs Script Converter — Word to Excel</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<title>Script Converter — Word to Excel</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   :root {
     --primary: #1f4e78;
@@ -67,9 +66,10 @@
     font-weight: 700;
   }
   .upload-area {
+    display: block;
     border: 2px dashed var(--border);
     border-radius: 6px;
-    padding: 32px;
+    padding: 40px 24px;
     text-align: center;
     cursor: pointer;
     transition: all 0.2s;
@@ -85,11 +85,25 @@
     background: #f0f9f4;
   }
   .upload-area input { display: none; }
-  .upload-icon { font-size: 28px; margin-bottom: 6px; opacity: 0.6; }
-  .upload-text { color: var(--text-muted); }
-  .upload-text strong { color: var(--text); }
+  .upload-icon {
+    font-size: 36px;
+    margin-bottom: 10px;
+    opacity: 0.55;
+    line-height: 1;
+  }
+  .upload-text {
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+  .upload-text strong { color: var(--primary); }
+  .upload-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    opacity: 0.8;
+  }
   .file-info {
-    margin-top: 10px;
+    margin-top: 12px;
     font-size: 13px;
     color: var(--success);
     font-weight: 500;
@@ -158,6 +172,7 @@
     font-size: 12px;
     white-space: nowrap;
   }
+  th.tip-col { cursor: help; }
   td {
     border: 1px solid #e5e9ef;
     padding: 0;
@@ -202,6 +217,7 @@
   }
 
   /* Column widths matching Excel template */
+  col.c-actions     { width: 75px;  }
   col.c-timeframe   { width: 110px; }
   col.c-category    { width: 130px; }
   col.c-qnum        { width: 70px;  }
@@ -212,8 +228,7 @@
   col.c-next        { width: 150px; }
   col.c-alert       { width: 90px;  }
   col.c-issue       { width: 110px; }
-  col.c-negative    { width: 60px;  }
-  col.c-actions     { width: 75px;  }
+  col.c-negative    { width: 80px;  }
 
   .negative-toggle {
     display: flex;
@@ -221,24 +236,16 @@
     justify-content: center;
     height: 100%;
     padding: 8px;
+    gap: 4px;
   }
   .negative-toggle input { cursor: pointer; }
+  .negative-toggle label { cursor: pointer; font-size: 11px; color: var(--text-muted); }
 
   .empty-state {
     text-align: center;
     padding: 40px;
     color: var(--text-muted);
   }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    background: #eef2f7;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 500;
-  }
-  .badge.primary { background: var(--primary); color: white; }
   .help-text {
     background: #fff8e6;
     border: 1px solid #f4dba6;
@@ -277,6 +284,7 @@
     transition: all 0.2s;
     pointer-events: none;
     z-index: 1000;
+    max-width: 400px;
   }
   #toast.show { opacity: 1; transform: translateY(0); }
   #toast.error { background: var(--danger); }
@@ -304,12 +312,27 @@
     font-size: 13px;
   }
   .meta-fields input:focus { outline: 2px solid var(--primary-light); outline-offset: -1px; }
+
+  /* Debug panel - hidden by default */
+  #debugPanel {
+    margin-top: 12px;
+    padding: 10px;
+    background: #f8f9fb;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 11px;
+    max-height: 200px;
+    overflow: auto;
+    display: none;
+  }
+  #debugPanel.visible { display: block; }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>PROMs Script Converter</h1>
+  <h1>Script Converter</h1>
   <p>Convert a Word script export into the standard Excel workbook template</p>
 </header>
 
@@ -321,8 +344,10 @@
       <input type="file" id="fileInput" accept=".docx">
       <div class="upload-icon">📄</div>
       <div class="upload-text"><strong>Click to choose a .docx file</strong> or drag and drop here</div>
+      <div class="upload-hint">Accepts a single .docx file exported from the SaaS platform</div>
       <div class="file-info" id="fileInfo"></div>
     </label>
+    <div id="debugPanel"></div>
   </div>
 
   <div class="step-card" id="reviewCard" style="display:none;">
@@ -344,10 +369,10 @@
     </div>
 
     <div class="help-text">
-      <strong>Tips:</strong> Every cell is editable — click and type. Use the checkbox in the "Neg?" column to mark a response as negative (will render in orange italics in the Excel). Use ↑↓ buttons to reorder rows; <strong>+</strong> to insert; <strong>×</strong> to delete. The parser pairs the English and Spanish versions automatically; only the English voice text appears in this layout, but you can edit it freely.
+      <strong>How to use this grid:</strong> Every cell is editable — click and type to change anything. Use the <strong>Highlight Orange</strong> checkbox in the last column to mark a response as a "negative" answer (it will appear in orange text in the Excel file, matching your template's convention for responses like "No" or "Not clear"). Use ↑↓ to reorder rows, <strong>+</strong> to insert a new row below, and <strong>×</strong> to delete.
       <div class="legend">
         <span class="legend-item"><span class="legend-swatch" style="background:#1f4e78;"></span> Header row</span>
-        <span class="legend-item"><span class="legend-swatch" style="background:#fff; color:#ff9900; display:inline-flex; align-items:center; justify-content:center; font-weight:600;">N</span> Negative response (orange in Excel)</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#fff; color:#ff9900; display:inline-flex; align-items:center; justify-content:center; font-weight:600;">N</span> Highlighted (orange) response</span>
       </div>
     </div>
 
@@ -386,7 +411,7 @@
             <th>Next Question</th>
             <th>Alert</th>
             <th>Issue Panel</th>
-            <th>Neg?</th>
+            <th class="tip-col" title="Check to highlight this response in orange in the Excel output">Highlight Orange</th>
           </tr>
         </thead>
         <tbody id="tableBody"></tbody>
@@ -396,7 +421,7 @@
 
   <div class="step-card" id="exportCard" style="display:none;">
     <h2><span class="step-num">3</span> Export to Excel</h2>
-    <p style="color:var(--text-muted); margin-top:0;">When the review looks good, download the workbook. The output matches the standard template: dark-blue header row, merged category cells, orange-italic styling for negative responses, and wrapped text.</p>
+    <p style="color:var(--text-muted); margin-top:0;">When the review looks good, download the workbook. The output matches the standard template: dark-blue header row, merged category cells, orange-highlighted negative responses, and wrapped text.</p>
     <button class="primary" id="exportBtn">⬇ Download Excel Workbook</button>
   </div>
 
@@ -406,265 +431,322 @@
 
 <script>
 /* ============================================================
-   Parser — converts mammoth raw-text output into structured rows
+   Utilities
    ============================================================ */
 
-// Phrases that indicate a "negative" response — these are flagged for orange italic styling
-// (you can edit the checkbox per-row if the auto-detection isn't right)
-const NEGATIVE_TOKENS = [
-  'no', 'not clear', 'wrong number', 'opt out', 'severe', 'worse',
-  'somewhat', 'somewhat clear'
-];
-
-// Defaults based on the Prisma template: "No", "Not clear", and "Somewhat clear"
-// get the orange treatment. "Wrong Number" / "Opt Out" are NOT auto-flagged
-// (they appear in black in the reference Excel) but can be toggled on per row.
-const DEFAULT_NEGATIVE = new Set([
-  'no', 'not clear', 'somewhat clear'
-]);
-
-function showToast(msg, type='info') {
+function showToast(msg, type='info', duration=3500) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.className = 'show ' + type;
-  setTimeout(() => { t.className = ''; }, 2500);
+  setTimeout(() => { t.className = ''; }, duration);
 }
 
-/**
- * Parse the raw text from mammoth into question sections.
- * Each top-level "## Heading" introduces a question/section.
- * Pairs of same-heading entries with Language: English / Spanish are merged.
- */
-function parseDocxText(rawText) {
-  // mammoth gives us text with section breaks. Split by lines.
-  const lines = rawText.split(/\r?\n/);
+function debugLog(msg) {
+  const panel = document.getElementById('debugPanel');
+  panel.classList.add('visible');
+  panel.textContent += msg + '\n';
+}
 
-  // First pass: walk lines and build "sections" — each starts at a "## " heading
-  // and contains a list of (label, value) entries plus a list of responses.
+/* ============================================================
+   DOCX -> structured paragraphs
+   We parse the docx XML directly, no mammoth required.
+   Each paragraph becomes an object: { style, text, isListItem }
+   ============================================================ */
+
+const WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+
+async function parseDocxFile(file) {
+  const buf = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(buf);
+  const docFile = zip.file('word/document.xml');
+  if (!docFile) throw new Error('Not a valid .docx file (missing word/document.xml)');
+  const xml = await docFile.async('string');
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, 'application/xml');
+  const parseError = doc.querySelector('parsererror');
+  if (parseError) throw new Error('Failed to parse document.xml: ' + parseError.textContent);
+
+  // Walk paragraphs in document order
+  const paragraphs = [];
+  const body = doc.getElementsByTagNameNS(WNS, 'body')[0];
+  if (!body) throw new Error('No <w:body> in document.xml');
+
+  for (const child of Array.from(body.children)) {
+    const tag = child.localName;
+    if (tag === 'p') {
+      paragraphs.push(extractParagraph(child));
+    } else if (tag === 'tbl') {
+      // Walk table cells, each cell can contain paragraphs
+      const ps = child.getElementsByTagNameNS(WNS, 'p');
+      for (const p of Array.from(ps)) paragraphs.push(extractParagraph(p));
+    }
+  }
+  return paragraphs;
+}
+
+function extractParagraph(pElem) {
+  // Style: <w:pPr><w:pStyle w:val="Heading2"/>
+  const pPr = pElem.getElementsByTagNameNS(WNS, 'pPr')[0];
+  let style = null;
+  let isListItem = false;
+  if (pPr) {
+    const pStyle = pPr.getElementsByTagNameNS(WNS, 'pStyle')[0];
+    if (pStyle) style = pStyle.getAttributeNS(WNS, 'val');
+    const numPr = pPr.getElementsByTagNameNS(WNS, 'numPr')[0];
+    if (numPr) isListItem = true;
+  }
+  // Concatenate run text. <w:br/> inserts a line break.
+  // Multiple <w:t> in different runs are joined with no separator.
+  let text = '';
+  // Walk descendants in document order; pick up <w:t> and <w:br>
+  const walker = document.createTreeWalker(pElem, NodeFilter.SHOW_ELEMENT, null);
+  let n;
+  while ((n = walker.nextNode())) {
+    if (n.namespaceURI === WNS) {
+      if (n.localName === 't') {
+        text += n.textContent;
+      } else if (n.localName === 'br') {
+        text += '\n';
+      } else if (n.localName === 'tab') {
+        text += '\t';
+      }
+    }
+  }
+  return { style: style, text: text, isListItem };
+}
+
+/* ============================================================
+   Paragraph stream -> sections
+   ============================================================ */
+
+const FIELD_MAP = {
+  'question text:':    'questionText',
+  'sms question:':     'smsQuestion',
+  'transition text:':  'transitionText',
+  'intro text:':       'introText',
+  'responses:':        '__responses__',
+};
+
+// Defaults based on the standard PROMs/Spine template:
+// "No", "Not clear", and "Somewhat clear" get orange highlighting.
+// "Wrong Number" / "Opt Out" are NOT auto-flagged (they appear in black
+// in the reference templates) — but the user can toggle the checkbox.
+const DEFAULT_NEGATIVE = new Set([
+  'no',
+  'not clear',
+  'somewhat clear',
+]);
+
+function paragraphsToSections(paragraphs) {
   const sections = [];
   let current = null;
-  let currentField = null;     // which named field we're accumulating into
-  let currentResponse = null;  // current numbered response being built
+  let currentField = null;
+  let currentResponse = null;
+  let docTitle = null;
 
-  function flushSection() {
+  function flushCurrent() {
     if (current) sections.push(current);
   }
+  function newSection(title) {
+    flushCurrent();
+    current = {
+      title,
+      language: null,
+      questionText: '',
+      smsQuestion: '',
+      transitionText: '',
+      introText: '',
+      responses: [],
+    };
+    currentField = null;
+    currentResponse = null;
+  }
 
-  // helpers
-  const isH2 = (l) => l.startsWith('## ') && !l.startsWith('### ');
-  const isH3 = (l) => l.startsWith('### ');
-  const isH4 = (l) => l.startsWith('#### ');
+  for (const p of paragraphs) {
+    const rawText = (p.text || '').replace(/\r/g, '');
+    const text = rawText.trim();
+    const style = p.style || '';
 
-  // Field markers we care about (### Question Text:, ### SMS Question:, etc.)
-  const FIELD_MAP = {
-    'question text:': 'questionText',
-    'sms question:': 'smsQuestion',
-    'transition text:': 'transitionText',
-    'intro text:': 'introText',
-    'responses:': '__responses__',
-  };
+    // Heading1: document title (only one expected)
+    if (style === 'Heading1') {
+      if (text) docTitle = text;
+      continue;
+    }
 
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
-    const line = raw.trim();
-
-    if (!line) continue;
-
-    // Top-level section banner like "#### Questions" — skip, not a section
-    if (isH4(line)) {
-      // Could be "#### Voice Mails" or "#### Sorry Messages" — treat these as
-      // pseudo-sections so they can be reviewed too, but we'll create a single
-      // "section" with no responses.
-      flushSection();
-      const title = line.replace(/^####\s*/, '').trim();
-      // Only treat "Voice Mails"/"Sorry Messages" as sections, ignore "Questions"
-      if (/voice mail|sorry message/i.test(title)) {
-        current = {
-          title, language: null,
-          questionText: '', smsQuestion: '',
-          transitionText: '', introText: '',
-          responses: [], extras: { isMeta: true }
-        };
+    // Heading4: top-level grouping. Most are "Questions" (skip);
+    // some like "Voice Mails", "Sorry Messages" we treat as sections.
+    if (style === 'Heading4') {
+      if (/voice mail|sorry message/i.test(text)) {
+        newSection(text);
+      } else {
+        // "Questions" — separator only
+        flushCurrent();
+        current = null;
         currentField = null;
         currentResponse = null;
-      } else {
-        current = null;
       }
       continue;
     }
 
-    // New section heading "## Some Title"
-    if (isH2(line)) {
-      flushSection();
-      const title = line.replace(/^##\s*/, '').trim();
-      current = {
-        title, language: null,
-        questionText: '', smsQuestion: '',
-        transitionText: '', introText: '',
-        responses: [], extras: {}
-      };
-      currentField = null;
-      currentResponse = null;
+    // Heading2: a new section (Introduction, Q1, Who Answered, etc.)
+    if (style === 'Heading2') {
+      if (text) newSection(text);
       continue;
     }
 
-    if (!current) continue;
-
-    // Field heading "### Question Text:" etc.
-    if (isH3(line)) {
-      const fieldLabel = line.replace(/^###\s*/, '').trim().toLowerCase();
-      const key = FIELD_MAP[fieldLabel];
+    // Heading3: a field label inside the current section
+    if (style === 'Heading3') {
+      if (!current) continue;
+      const label = text.toLowerCase().replace(/\s+$/, '');
+      const key = FIELD_MAP[label];
       if (key === '__responses__') {
         currentField = '__responses__';
         currentResponse = null;
       } else if (key) {
         currentField = key;
       } else {
-        // Unknown field — record it as an extra
+        // Some other heading — log but continue; treat as unknown field
         currentField = null;
       }
       continue;
     }
 
-    // "Language: English" or "Language: Spanish" inside a section.
-    // This can appear at the start of a section (before any field), or
-    // mid-section when a meta block has two languages back-to-back
-    // (e.g. Voice Mails has both English and Spanish under ### Question Text:).
-    const langMatch = line.match(/^Language:\s*(.+)$/i);
-    if (langMatch && currentField !== '__responses__') {
-      // If the section already has a language set and we encounter a new one,
-      // start a fresh section with the same title for the second language;
-      // the merge pass will pair them.
-      if (current.language && current.language !== langMatch[1].trim()) {
-        const continuationTitle = current.title;
-        sections.push(current);
-        current = {
-          title: continuationTitle,
-          language: langMatch[1].trim(),
-          questionText: '', smsQuestion: '',
-          transitionText: '', introText: '',
-          responses: [], extras: {}
-        };
-        currentField = null;
-        currentResponse = null;
-      } else {
-        current.language = langMatch[1].trim();
-      }
-      continue;
-    }
+    // Not a heading -> body paragraph for the current section
+    if (!current) continue;
 
-    // Inside the responses block
-    if (currentField === '__responses__') {
-      // A numbered response like "1. Yes"
-      const numMatch = line.match(/^(\d+)\.\s*(.+)$/);
-      if (numMatch) {
-        currentResponse = {
-          number: parseInt(numMatch[1], 10),
-          title: numMatch[2].trim(),
-          voiceResponse: '',
-          smsResponse: '',
-          issuePanel: '',
-          alert: '',
-          nextQuestion: '',
-        };
-        current.responses.push(currentResponse);
-        continue;
-      }
-      // Sub-bullets after a response: "- Issue Panel: ...", "- Alert: ...", "- Next Question: ..."
-      const bulletMatch = line.match(/^-\s*([^:]+):\s*(.*)$/);
-      if (bulletMatch && currentResponse) {
-        const label = bulletMatch[1].trim().toLowerCase();
-        const value = bulletMatch[2].trim();
-        const norm = (v) => v && !/^none$/i.test(v) ? v : '';
-        if (label === 'issue panel') currentResponse.issuePanel = norm(value);
-        else if (label === 'alert')   currentResponse.alert = norm(value);
-        else if (label === 'next question') currentResponse.nextQuestion = value;
-        continue;
-      }
-      // Inline "Voice Response: ..." / "SMS Response: ..." (no leading dash)
-      const vrMatch = line.match(/^Voice Response:\s*(.*)$/i);
-      if (vrMatch && currentResponse) {
-        currentResponse.voiceResponse = vrMatch[1].trim();
-        continue;
-      }
-      const srMatch = line.match(/^SMS Response:\s*(.*)$/i);
-      if (srMatch && currentResponse) {
-        currentResponse.smsResponse = srMatch[1].trim();
-        continue;
-      }
-      // continuation of an existing field — append to title or voice/sms response
-      // (rare in this format; ignore for now)
-      continue;
-    }
+    // Some paragraphs may contain multiple "logical" lines because they
+    // had <w:br/> separators. Process line by line for response-list parsing.
+    const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-    // Otherwise it's body text of the current field
-    if (currentField && current[currentField] !== undefined) {
-      const sep = current[currentField] ? '\n' : '';
-      current[currentField] = current[currentField] + sep + line;
+    for (const line of lines) {
+      // "Language: English" / "Language: Spanish" — start-of-section or
+      // mid-section language switch (Voice Mails / Sorry Messages pattern).
+      const langMatch = line.match(/^Language:\s*(.+)$/i);
+      if (langMatch && currentField !== '__responses__') {
+        const newLang = langMatch[1].trim();
+        if (current.language && current.language !== newLang) {
+          // Same-title section continues in another language: start fresh
+          const continuationTitle = current.title;
+          sections.push(current);
+          current = {
+            title: continuationTitle, language: newLang,
+            questionText: '', smsQuestion: '',
+            transitionText: '', introText: '',
+            responses: [],
+          };
+          currentField = null;
+          currentResponse = null;
+        } else {
+          current.language = newLang;
+        }
+        continue;
+      }
+
+      // Inside Responses block
+      if (currentField === '__responses__') {
+        // Numbered response item: "1. Yes", "2. Wrong Number", etc.
+        const numMatch = line.match(/^(\d+)[\.\)]\s*(.+)$/);
+        if (numMatch && !p.isListItem) {
+          // Only treat as a NEW response if this is NOT a list-style line
+          // (list items like "Issue Panel: None" never start with a digit anyway)
+          currentResponse = {
+            number: parseInt(numMatch[1], 10),
+            title: numMatch[2].trim(),
+            voiceResponse: '',
+            smsResponse: '',
+            issuePanel: '',
+            alert: '',
+            nextQuestion: '',
+          };
+          current.responses.push(currentResponse);
+          continue;
+        }
+
+        // List-item bullets: "Issue Panel: None", "Alert: None", "Next Question: Q1"
+        // These come from paragraphs marked as list items in Word.
+        const bulletMatch = line.match(/^([A-Za-z][A-Za-z ]+?):\s*(.*)$/);
+        if (bulletMatch && currentResponse) {
+          const label = bulletMatch[1].trim().toLowerCase();
+          const value = bulletMatch[2].trim();
+          const norm = (v) => (v && !/^none$/i.test(v)) ? v : '';
+
+          if (label === 'issue panel') {
+            currentResponse.issuePanel = norm(value); continue;
+          }
+          if (label === 'alert') {
+            currentResponse.alert = norm(value); continue;
+          }
+          if (label === 'next question') {
+            currentResponse.nextQuestion = value; continue;
+          }
+          if (label === 'voice response') {
+            currentResponse.voiceResponse = value; continue;
+          }
+          if (label === 'sms response') {
+            currentResponse.smsResponse = value; continue;
+          }
+        }
+
+        // Unknown line inside responses — ignore
+        continue;
+      }
+
+      // Body content for whatever field is open
+      if (currentField && current[currentField] !== undefined) {
+        const sep = current[currentField] ? '\n' : '';
+        current[currentField] = current[currentField] + sep + line;
+      }
+      // (if no current field, just drop the line)
     }
   }
-  flushSection();
+  flushCurrent();
 
-  // Second pass: merge English/Spanish pairs (same title, consecutive)
+  // Merge English/Spanish pairs (same title, back-to-back, different languages)
   const merged = [];
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i];
     const next = sections[i + 1];
     if (next && next.title === s.title && s.language && next.language && s.language !== next.language) {
-      // Merge them. Prefer English as primary for voice/responses; combine SMS texts.
       const eng = s.language.toLowerCase().startsWith('en') ? s : next;
-      const spa = s.language.toLowerCase().startsWith('es') || s.language.toLowerCase().startsWith('sp') ? s : next;
-      const mergedSection = {
+      const spa = s !== eng ? s : next;
+      const out = {
         title: s.title,
         questionText: eng.questionText,
-        questionTextSpanish: spa.questionText,
         smsQuestion: eng.smsQuestion,
-        smsQuestionSpanish: spa.smsQuestion,
         transitionText: eng.transitionText || spa.transitionText,
         introText: eng.introText || spa.introText,
         responses: eng.responses.length ? eng.responses : spa.responses,
-        // Bring along any per-response Spanish voice/SMS for the matching number
-        responsesSpanish: spa.responses,
-        extras: s.extras
+        spanishResponses: spa.responses,
       };
-      merged.push(mergedSection);
-      i++; // skip the pair
+      merged.push(out);
+      i++;
     } else {
       merged.push(s);
     }
   }
 
-  return merged;
+  return { sections: merged, docTitle };
 }
 
-/**
- * Render the placeholder tags like <PatientFirstName> as [Patient First Name],
- * matching the Excel template's convention.
- */
+/* ============================================================
+   Sections -> table rows
+   ============================================================ */
+
 function normalizePlaceholders(text) {
   if (!text) return '';
+  // <PatientFirstName> -> [Patient First Name]
   return text.replace(/<([A-Z][a-zA-Z]+)>/g, (_, name) => {
-    // Insert spaces before capitals: PatientFirstName -> Patient First Name
     const spaced = name.replace(/([a-z])([A-Z])/g, '$1 $2');
     return '[' + spaced + ']';
   });
 }
 
-/**
- * Combine the English voice text with the Spanish SMS reply (and English SMS)
- * — matching the existing Excel output style where the SMS column contains
- * both English and Spanish reply prompts in some rows. We default to the
- * English SMS text only; users can edit.
- */
 function buildVoiceText(section) {
-  // Combine transition + intro + question text into a single "voice" cell
-  // (matches the Excel format where the full prompt is one cell)
   const parts = [];
   if (section.transitionText) parts.push(section.transitionText);
   if (section.introText) {
-    // Replace placeholder in intro
     const intro = normalizePlaceholders(section.introText);
-    // The transition usually ends with "of" -- glue intro onto it
     if (parts.length && /\bof\s*$/i.test(parts[parts.length - 1])) {
       parts[parts.length - 1] = parts[parts.length - 1] + ' ' + intro + '.';
     } else {
@@ -675,61 +757,46 @@ function buildVoiceText(section) {
   return normalizePlaceholders(parts.join(' '));
 }
 
-function buildSmsText(section) {
-  return normalizePlaceholders(section.smsQuestion || '');
-}
-
-/**
- * Convert parsed sections into table rows matching the Excel layout.
- * Each section produces 1+N rows: 1 "header" row with question text + first
- * response, then N-1 rows with just the subsequent responses.
- * For sections with no responses (Introduction, Instructions, Goodbye, etc.),
- * we produce a single row.
- */
 function sectionsToRows(sections) {
   const rows = [];
-  // Categories that need a "Question #" (Q1..Q9 etc.) — keep what was in the
-  // original section title if it looks like Q\d+
   for (const s of sections) {
     const qNumMatch = s.title.match(/^(Q\d+)$/);
     const qNum = qNumMatch ? qNumMatch[1] : '';
-    // The "Question Category" cell — the Excel uses friendly names like "Health Needs"
-    // but the docx export uses the question id. We'll seed with the title; user can rename.
     const category = s.title;
-
-    const voiceText = buildVoiceText(s);
-    const smsText = buildSmsText(s);
+    const voice = buildVoiceText(s);
+    const sms = normalizePlaceholders(s.smsQuestion || '');
 
     if (s.responses && s.responses.length > 0) {
       s.responses.forEach((r, idx) => {
+        const titleLower = (r.title || '').trim().toLowerCase();
+        const isEndType = titleLower.includes('wrong number') || titleLower.includes('opt out');
         rows.push({
-          timeframe: idx === 0 ? '' : '',
-          category: idx === 0 ? category : '',
-          qnum: idx === 0 ? qNum : '',
-          voice: idx === 0 ? voiceText : '',
-          sms:   idx === 0 ? smsText : '',
-          responseTitle: r.title,
+          timeframe: '',
+          category:  idx === 0 ? category : '',
+          qnum:      idx === 0 ? qNum : '',
+          voice:     idx === 0 ? voice : '',
+          sms:       idx === 0 ? sms : '',
+          responseTitle: r.title || '',
           response: r.voiceResponse || r.smsResponse || '',
-          nextQuestion: r.nextQuestion || (r.title.toLowerCase().includes('wrong number') || r.title.toLowerCase().includes('opt out') ? '[End]' : ''),
+          nextQuestion: r.nextQuestion || (isEndType ? '[End]' : ''),
           alert: r.alert || '',
           issuePanel: r.issuePanel || '',
-          negative: DEFAULT_NEGATIVE.has(r.title.trim().toLowerCase())
+          negative: DEFAULT_NEGATIVE.has(titleLower),
         });
       });
     } else {
-      // No responses — single row with just the prompts
       rows.push({
         timeframe: '',
         category: category,
         qnum: qNum,
-        voice: voiceText,
-        sms: smsText,
+        voice: voice,
+        sms: sms,
         responseTitle: '',
         response: '',
         nextQuestion: '',
         alert: '',
         issuePanel: '',
-        negative: false
+        negative: false,
       });
     }
   }
@@ -737,14 +804,22 @@ function sectionsToRows(sections) {
 }
 
 /* ============================================================
-   UI Rendering & State
+   UI State & Rendering
    ============================================================ */
 
 let state = {
   rows: [],
-  parsedRows: [], // snapshot for "reset"
-  fileName: ''
+  parsedRows: [],
+  fileName: '',
 };
+
+function blankRow() {
+  return {
+    timeframe: '', category: '', qnum: '', voice: '', sms: '',
+    responseTitle: '', response: '', nextQuestion: '', alert: '', issuePanel: '',
+    negative: false,
+  };
+}
 
 function renderTable() {
   const tbody = document.getElementById('tableBody');
@@ -752,10 +827,9 @@ function renderTable() {
 
   state.rows.forEach((row, idx) => {
     const tr = document.createElement('tr');
-    // visually mark "header" rows of a section (where category text exists)
     if (row.category) tr.classList.add('section-divider');
 
-    // Actions cell
+    // Actions
     const actions = document.createElement('td');
     actions.className = 'row-actions';
     actions.innerHTML = `
@@ -764,40 +838,33 @@ function renderTable() {
         <button class="small" data-act="down" data-idx="${idx}" title="Move down">↓</button>
       </div>
       <div>
-        <button class="small" data-act="insert" data-idx="${idx}" title="Insert below">+</button>
+        <button class="small" data-act="insert" data-idx="${idx}" title="Insert row below">+</button>
         <button class="small danger" data-act="delete" data-idx="${idx}" title="Delete row">×</button>
       </div>
     `;
     tr.appendChild(actions);
 
-    const fields = [
-      { key: 'timeframe' }, { key: 'category' }, { key: 'qnum' },
-      { key: 'voice' }, { key: 'sms' }, { key: 'responseTitle' },
-      { key: 'response' }, { key: 'nextQuestion' }, { key: 'alert' }, { key: 'issuePanel' },
-    ];
-
-    fields.forEach(f => {
+    const fields = ['timeframe','category','qnum','voice','sms','responseTitle','response','nextQuestion','alert','issuePanel'];
+    fields.forEach(key => {
       const td = document.createElement('td');
-      // If responseTitle is the "negative" field, color orange italic
-      if (f.key === 'responseTitle' && row.negative) td.classList.add('negative');
+      if (key === 'responseTitle' && row.negative) td.classList.add('negative');
       const ta = document.createElement('textarea');
       ta.className = 'cell-edit';
-      ta.value = row[f.key] || '';
+      ta.value = row[key] || '';
       ta.rows = 1;
       ta.addEventListener('input', (e) => {
-        state.rows[idx][f.key] = e.target.value;
+        state.rows[idx][key] = e.target.value;
         autoSize(e.target);
       });
       ta.addEventListener('focus', () => autoSize(ta));
       td.appendChild(ta);
       tr.appendChild(td);
-      // size on next tick
       requestAnimationFrame(() => autoSize(ta));
     });
 
-    // Negative-toggle cell
+    // Highlight Orange toggle
     const negTd = document.createElement('td');
-    negTd.innerHTML = `<div class="negative-toggle"><input type="checkbox" data-act="negative" data-idx="${idx}" ${row.negative ? 'checked' : ''}></div>`;
+    negTd.innerHTML = `<div class="negative-toggle"><input type="checkbox" id="neg-${idx}" data-act="negative" data-idx="${idx}" ${row.negative ? 'checked' : ''}><label for="neg-${idx}">Orange</label></div>`;
     tr.appendChild(negTd);
 
     tbody.appendChild(tr);
@@ -812,7 +879,6 @@ function autoSize(ta) {
   ta.style.height = Math.min(ta.scrollHeight, 220) + 'px';
 }
 
-// Event delegation for action buttons
 document.getElementById('tableBody').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-act]');
   if (!btn) return;
@@ -841,14 +907,6 @@ document.getElementById('tableBody').addEventListener('change', (e) => {
   }
 });
 
-function blankRow() {
-  return {
-    timeframe: '', category: '', qnum: '', voice: '', sms: '',
-    responseTitle: '', response: '', nextQuestion: '', alert: '', issuePanel: '',
-    negative: false
-  };
-}
-
 document.getElementById('addRowBtn').addEventListener('click', () => {
   state.rows.push(blankRow());
   renderTable();
@@ -862,7 +920,7 @@ document.getElementById('resetBtn').addEventListener('click', () => {
 });
 
 /* ============================================================
-   File upload & parse trigger
+   File upload
    ============================================================ */
 
 const uploadArea = document.getElementById('uploadArea');
@@ -889,323 +947,334 @@ async function handleFile(file) {
   state.fileName = file.name;
   document.getElementById('fileInfo').textContent = '✓ ' + file.name + ' loaded';
   uploadArea.classList.add('has-file');
+  document.getElementById('debugPanel').textContent = '';
+  document.getElementById('debugPanel').classList.remove('visible');
 
   try {
-    const buffer = await file.arrayBuffer();
-    const result = await mammoth.convertToMarkdown({ arrayBuffer: buffer });
-    const rawText = result.value;
-
-    const sections = parseDocxText(rawText);
+    const paragraphs = await parseDocxFile(file);
+    const { sections, docTitle } = paragraphsToSections(paragraphs);
     const rows = sectionsToRows(sections);
+
+    if (rows.length === 0) {
+      throw new Error('No content was parsed from this document. The format may be different from the expected SaaS export.');
+    }
 
     state.rows = rows;
     state.parsedRows = JSON.parse(JSON.stringify(rows));
 
-    // Try to extract a useful sheet name & title from the doc
-    const titleLine = rawText.match(/^#\s+(.+)$/m);
-    const docTitle = titleLine ? titleLine[1].trim() : 'PROMs Script';
-    document.getElementById('sheetName').value = docTitle.substring(0, 31);
-    document.getElementById('workbookTitle').value = docTitle;
+    const title = docTitle || file.name.replace(/\.docx$/i, '');
+    document.getElementById('sheetName').value = title.substring(0, 31);
+    document.getElementById('workbookTitle').value = title;
 
     document.getElementById('reviewCard').style.display = '';
     document.getElementById('exportCard').style.display = '';
 
     renderTable();
-    showToast('Parsed ' + rows.length + ' rows from document', 'success');
+    showToast('Parsed ' + sections.length + ' sections (' + rows.length + ' rows)', 'success');
   } catch (err) {
     console.error(err);
-    showToast('Failed to parse document: ' + err.message, 'error');
+    showToast('Failed to parse: ' + err.message, 'error', 6000);
+    debugLog('ERROR: ' + err.message);
+    debugLog(err.stack || '');
   }
 }
 
 /* ============================================================
-   Excel export
+   Excel export — builds the xlsx file directly using JSZip.
+   No SheetJS dependency; we write the OOXML files ourselves.
+   This avoids the silent-failure modes of SheetJS + post-processing.
    ============================================================ */
 
-function exportToExcel() {
-  const wb = XLSX.utils.book_new();
-  const sheetName = (document.getElementById('sheetName').value || 'Script').substring(0, 31);
-  const workbookTitle = document.getElementById('workbookTitle').value || 'PROMs Script';
-  const defaultTimeframe = document.getElementById('defaultTimeframe').value;
-
-  // Build sheet AoA
-  // Row 1: workbook title
-  // Row 2: explanatory note
-  // Row 3: blank
-  // Row 4: column headers
-  // Row 5+: data
-  const headerNote = 'Please note, responses in orange italics indicate response are negative and no responses for SMS, a negative response and that an alert will be sent to your follow-up staff. The Title with the "*" is considered the first medical question. If response is in black then it will not be part of the SMS communication.';
-  const colHeaders = ['Timeframe','Question Category','Question #','Voice Call Question Text','SMS Question Text','Response Title','Response','Next Question','Alert','Issue Panel'];
-
-  const aoa = [
-    [workbookTitle],
-    [headerNote],
-    [],
-    colHeaders
-  ];
-
-  // Determine which data row gets the default timeframe — put on first row of section data
-  let firstDataRowAdded = false;
-  state.rows.forEach((r) => {
-    let timeframe = r.timeframe;
-    if (!firstDataRowAdded && !timeframe) {
-      timeframe = defaultTimeframe;
-      firstDataRowAdded = true;
+async function exportToExcel() {
+  try {
+    if (!window.JSZip) {
+      showToast('JSZip library failed to load (check internet connection)', 'error', 6000);
+      return;
     }
-    aoa.push([
-      timeframe || '',
-      r.category || '',
-      r.qnum || '',
-      r.voice || '',
-      r.sms || '',
-      r.responseTitle || '',
-      r.response || '',
-      r.nextQuestion || '',
-      r.alert || '',
-      r.issuePanel || ''
-    ]);
-  });
 
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const sheetName = (document.getElementById('sheetName').value || 'Script').substring(0, 31);
+    const workbookTitle = document.getElementById('workbookTitle').value || 'Script';
+    const defaultTimeframe = document.getElementById('defaultTimeframe').value;
 
-  // Column widths (in characters)
-  ws['!cols'] = [
-    { wch: 14 }, { wch: 17 }, { wch: 13 }, { wch: 76 }, { wch: 67 },
-    { wch: 23 }, { wch: 37 }, { wch: 24 }, { wch: 9 }, { wch: 14 }
-  ];
+    const headerNote = 'Please note, responses in orange italics indicate response are negative and no responses for SMS, a negative response and that an alert will be sent to your follow-up staff. The Title with the "*" is considered the first medical question. If response is in black then it will not be part of the SMS communication.';
+    const colHeaders = ['Timeframe','Question Category','Question #','Voice Call Question Text','SMS Question Text','Response Title','Response','Next Question','Alert','Issue Panel'];
 
-  // Row heights
-  ws['!rows'] = [];
-  ws['!rows'][0] = { hpt: 30 };  // title
-  ws['!rows'][1] = { hpt: 45 };  // note
-  ws['!rows'][3] = { hpt: 20 };  // header
+    // Build sheet data row-by-row.
+    // sheetData is an array of rows; each row is an array of cells.
+    // Each cell is { v: value, style: styleIndex } where style is the xf index in styles.xml.
+    //
+    // Layout:
+    //   Row 1: title (merged A1:J1, style 1)
+    //   Row 2: note  (merged A2:J2, style 2)
+    //   Row 3: blank
+    //   Row 4: column headers (style 3)
+    //   Row 5+: data (style 4 default, style 5 for negative response titles in col F)
+    const STYLE = { DEFAULT: 0, TITLE: 1, NOTE: 2, HEADER: 3, BODY: 4, BODY_NEG: 5 };
 
-  // Merges: title spans all columns
-  ws['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } },
-  ];
+    const sheetData = [];
+    // Row 1
+    sheetData.push([{ v: workbookTitle, style: STYLE.TITLE }]);
+    // Row 2
+    sheetData.push([{ v: headerNote, style: STYLE.NOTE }]);
+    // Row 3 (blank)
+    sheetData.push([]);
+    // Row 4 (headers)
+    sheetData.push(colHeaders.map(h => ({ v: h, style: STYLE.HEADER })));
 
-  // Merge consecutive cells in column B (category) and column D (voice text) and column E (sms text)
-  // when subsequent rows are response-only continuations of the same section
-  const sheetStartRow = 4; // 0-indexed; row 5 in Excel
-  let groupStart = sheetStartRow;
-  for (let i = 0; i < state.rows.length; i++) {
-    const rowNum = sheetStartRow + i;
-    const r = state.rows[i];
-    const next = state.rows[i + 1];
-    // If next row has empty category, it's part of the same section; otherwise close the group
-    if (!next || next.category) {
-      // close group from groupStart to rowNum
-      if (rowNum > groupStart) {
-        // Merge category (col B = 1), voice (col D = 3), sms (col E = 4)
-        // Excel only merges if the source has the value at the top
-        ['B','D','E'].forEach(col => {
-          const ci = col.charCodeAt(0) - 65;
-          ws['!merges'].push({ s: { r: groupStart, c: ci }, e: { r: rowNum, c: ci } });
-        });
+    // Data rows
+    let firstDataRowAdded = false;
+    state.rows.forEach(r => {
+      let timeframe = r.timeframe || '';
+      if (!firstDataRowAdded && !timeframe) {
+        timeframe = defaultTimeframe;
+        firstDataRowAdded = true;
       }
-      groupStart = rowNum + 1;
+      const titleStyle = r.negative ? STYLE.BODY_NEG : STYLE.BODY;
+      sheetData.push([
+        { v: timeframe,         style: STYLE.BODY },
+        { v: r.category || '',  style: STYLE.BODY },
+        { v: r.qnum || '',      style: STYLE.BODY },
+        { v: r.voice || '',     style: STYLE.BODY },
+        { v: r.sms || '',       style: STYLE.BODY },
+        { v: r.responseTitle || '', style: titleStyle },
+        { v: r.response || '',  style: STYLE.BODY },
+        { v: r.nextQuestion || '', style: STYLE.BODY },
+        { v: r.alert || '',     style: STYLE.BODY },
+        { v: r.issuePanel || '', style: STYLE.BODY },
+      ]);
+    });
+
+    // Merges (1-indexed cell refs): title row, note row, plus per-section
+    // merges of B/D/E columns over consecutive section rows.
+    const merges = [
+      { ref: 'A1:J1' },
+      { ref: 'A2:J2' },
+    ];
+    const dataStartRow = 5; // Excel row number of the first data row
+    let groupStart = dataStartRow;
+    for (let i = 0; i < state.rows.length; i++) {
+      const rowNum = dataStartRow + i;
+      const next = state.rows[i + 1];
+      const closesGroup = !next || next.category;
+      if (closesGroup && rowNum > groupStart) {
+        // Merge B (col 2), D (col 4), E (col 5) from groupStart to rowNum
+        merges.push({ ref: `B${groupStart}:B${rowNum}` });
+        merges.push({ ref: `D${groupStart}:D${rowNum}` });
+        merges.push({ ref: `E${groupStart}:E${rowNum}` });
+      }
+      if (closesGroup) groupStart = rowNum + 1;
     }
-  }
 
-  // Apply cell styles using XLSX-style "s" property. SheetJS Community Edition
-  // does NOT write styles in the standard build — but xlsx-js-style does.
-  // To stay self-contained with the standard build, we'll write a styled file
-  // by post-processing the XML. The easiest approach: write the basics, then
-  // bake the orange-italic styling and header styling into a fresh workbook
-  // using XLSX's lower-level _S property convention. Since the community build
-  // ignores styles, we need to embed the styled XLSX manually.
-  // ---> Switch to manual XML generation for styling fidelity.
+    // Column widths in Excel units (approximate character widths)
+    const colWidths = [14, 17, 13, 76, 67, 23, 37, 24, 9, 14];
+    // Row heights (only for special rows)
+    const rowHeights = { 1: 30, 2: 45, 4: 20 };
 
-  // Use the basic write with !merges/!cols/!rows preserved, then patch the
-  // styles via a small post-process step in browser using JSZip.
-  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    // Build the xlsx ZIP
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', CONTENT_TYPES_XML);
+    zip.file('_rels/.rels', ROOT_RELS_XML);
+    zip.file('xl/workbook.xml', buildWorkbookXml(sheetName));
+    zip.file('xl/_rels/workbook.xml.rels', WORKBOOK_RELS_XML);
+    zip.file('xl/styles.xml', STYLES_XML);
+    zip.file('xl/worksheets/sheet1.xml', buildSheetXml(sheetData, merges, colWidths, rowHeights));
+    zip.file('docProps/core.xml', CORE_XML);
+    zip.file('docProps/app.xml', APP_XML);
 
-  // Write to a binary string with cellStyles enabled
-  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true });
+    const blob = await zip.generateAsync({
+      type: 'blob',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      compression: 'DEFLATE',
+    });
 
-  // Post-process: inject styles.xml & cell style references via JSZip
-  // (JSZip is bundled in the xlsx full build)
-  postProcessStyles(wbout, sheetName).then(blob => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = (state.fileName.replace(/\.docx$/i, '') || 'PROMs_Script') + '.xlsx';
+    a.download = (state.fileName.replace(/\.docx$/i, '') || 'Script') + '.xlsx';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
     showToast('Excel workbook downloaded', 'success');
-  }).catch(err => {
-    console.error(err);
-    showToast('Export failed: ' + err.message, 'error');
-  });
-}
-
-/**
- * Inject custom styles into the xlsx file (which SheetJS community build leaves
- * unstyled). We rebuild styles.xml and tag header / negative cells with the
- * matching style index.
- */
-async function postProcessStyles(arrayBuffer, sheetName) {
-  // The full xlsx CDN build bundles JSZip globally as `JSZip`? It doesn't — but
-  // SheetJS includes its own zip via CFB. The simplest path: use the browser's
-  // built-in `DecompressionStream` is unreliable. Load JSZip separately:
-  if (!window.JSZip) {
-    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+  } catch (err) {
+    console.error('Export error:', err);
+    showToast('Export failed: ' + err.message, 'error', 8000);
+    debugLog('EXPORT ERROR: ' + err.message);
+    debugLog(err.stack || '');
   }
-  const zip = await JSZip.loadAsync(arrayBuffer);
-
-  // 1) Write styles.xml
-  const stylesXml = buildStylesXml();
-  zip.file('xl/styles.xml', stylesXml);
-
-  // 2) Patch the sheet XML: find each cell and add the appropriate s="N"
-  // We need the actual sheet path. Sheets live at xl/worksheets/sheetN.xml.
-  // The workbook.xml maps sheetName -> sheetId/relationship; we'll just patch
-  // the first worksheet (since we only write one).
-  const sheetFile = Object.keys(zip.files).find(p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
-  if (!sheetFile) throw new Error('Could not locate worksheet XML in package');
-  let sheetXml = await zip.file(sheetFile).async('string');
-
-  sheetXml = applyCellStyles(sheetXml);
-
-  zip.file(sheetFile, sheetXml);
-
-  return await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-}
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('Failed to load ' + src));
-    document.head.appendChild(s);
-  });
-}
-
-/**
- * Build a styles.xml document defining the cell styles we need:
- *   index 0: default
- *   index 1: title (bold, 24pt, wrap, left-align)
- *   index 2: note (wrap, left-align)
- *   index 3: header (bold, white, dark-blue fill, center, wrap, border)
- *   index 4: body (wrap, left-align top, border)
- *   index 5: body negative (orange italic, wrap, left-align top, border)
- */
-function buildStylesXml() {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-            mc:Ignorable="x14ac"
-            xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac">
-  <fonts count="6" x14ac:knownFonts="1">
-    <font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-    <font><b/><sz val="24"/><color rgb="FF000000"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-    <font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-    <font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-    <font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-    <font><sz val="11"/><color rgb="FFFF9900"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-  </fonts>
-  <fills count="3">
-    <fill><patternFill patternType="none"/></fill>
-    <fill><patternFill patternType="gray125"/></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill>
-  </fills>
-  <borders count="2">
-    <border><left/><right/><top/><bottom/><diagonal/></border>
-    <border>
-      <left style="thin"><color rgb="FFBFBFBF"/></left>
-      <right style="thin"><color rgb="FFBFBFBF"/></right>
-      <top style="thin"><color rgb="FFBFBFBF"/></top>
-      <bottom style="thin"><color rgb="FFBFBFBF"/></bottom>
-      <diagonal/>
-    </border>
-  </borders>
-  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="6">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1">
-      <alignment horizontal="left" vertical="center" wrapText="1"/>
-    </xf>
-    <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1">
-      <alignment horizontal="left" vertical="top" wrapText="1"/>
-    </xf>
-    <xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">
-      <alignment horizontal="center" vertical="center" wrapText="1"/>
-    </xf>
-    <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">
-      <alignment horizontal="left" vertical="top" wrapText="1"/>
-    </xf>
-    <xf numFmtId="0" fontId="5" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">
-      <alignment horizontal="left" vertical="top" wrapText="1"/>
-    </xf>
-  </cellXfs>
-  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-  <dxfs count="0"/>
-  <tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>
-</styleSheet>`;
-}
-
-/**
- * Walk the worksheet XML and stamp each <c> cell with the right s="N":
- *   Row 1 -> style 1 (title)
- *   Row 2 -> style 2 (note)
- *   Row 4 -> style 3 (header)
- *   Row 5+ -> style 4 (body) or style 5 (body negative) for column F if negative
- *
- * Determining "negative" requires knowing which Response Title rows were checked.
- * We carry the row.negative flags via state.rows and align them with data rows
- * starting at sheet row 5.
- */
-function applyCellStyles(sheetXml) {
-  const negativeFlags = state.rows.map(r => !!r.negative);
-
-  // We'll parse <row r="N"> blocks and within each, rewrite <c r="X#"> tags.
-  return sheetXml.replace(/<row\b([^>]*)>([\s\S]*?)<\/row>/g, (match, rowAttrs, inner) => {
-    const rowNumMatch = rowAttrs.match(/r="(\d+)"/);
-    if (!rowNumMatch) return match;
-    const rowNum = parseInt(rowNumMatch[1], 10);
-
-    let style;
-    if (rowNum === 1) style = 1;
-    else if (rowNum === 2) style = 2;
-    else if (rowNum === 4) style = 3;
-    else if (rowNum >= 5) style = 4;
-    else style = 0;
-
-    // Process each cell <c ... /> or <c ...>...</c>
-    const newInner = inner.replace(/<c\b([^>]*)(\/>|>([\s\S]*?)<\/c>)/g, (cm, attrs, tail, cellInner) => {
-      // Determine cell column letter from r="X#"
-      const refMatch = attrs.match(/r="([A-Z]+)(\d+)"/);
-      const colLetters = refMatch ? refMatch[1] : '';
-
-      let useStyle = style;
-
-      // Negative response styling applies only to column F on data rows (>=5)
-      if (rowNum >= 5 && colLetters === 'F') {
-        const dataIdx = rowNum - 5;
-        if (negativeFlags[dataIdx]) useStyle = 5;
-      }
-
-      // Strip any existing s="..." attribute, then add the new one
-      let newAttrs = attrs.replace(/\s*s="\d+"/, '');
-      newAttrs += ` s="${useStyle}"`;
-
-      if (tail === '/>') {
-        return `<c${newAttrs}/>`;
-      } else {
-        return `<c${newAttrs}>${cellInner}</c>`;
-      }
-    });
-
-    return `<row${rowAttrs}>${newInner}</row>`;
-  });
 }
 
 document.getElementById('exportBtn').addEventListener('click', exportToExcel);
+
+// ---- OOXML helpers ----
+
+function xmlEscape(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+    // Strip control chars except tab/LF/CR (xlsx is strict about these)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+}
+
+// Convert 1-based column index to Excel letters (1->A, 27->AA, etc.)
+function colLetter(n) {
+  let s = '';
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+function buildSheetXml(sheetData, merges, colWidths, rowHeights) {
+  let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  xml += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
+  xml += '<sheetViews><sheetView workbookViewId="0"/></sheetViews>';
+  xml += '<sheetFormatPr defaultRowHeight="15"/>';
+
+  // <cols>: column widths
+  if (colWidths && colWidths.length) {
+    xml += '<cols>';
+    colWidths.forEach((w, i) => {
+      const col = i + 1;
+      xml += `<col min="${col}" max="${col}" width="${w}" customWidth="1"/>`;
+    });
+    xml += '</cols>';
+  }
+
+  // <sheetData>
+  xml += '<sheetData>';
+  sheetData.forEach((row, rIdx) => {
+    const rowNum = rIdx + 1;
+    const ht = rowHeights && rowHeights[rowNum];
+    const heightAttr = ht ? ` ht="${ht}" customHeight="1"` : '';
+    if (!row || row.length === 0) {
+      // Empty row — still emit if it has a custom height (e.g. row 3)
+      if (heightAttr) xml += `<row r="${rowNum}"${heightAttr}/>`;
+      return;
+    }
+    xml += `<row r="${rowNum}"${heightAttr}>`;
+    row.forEach((cell, cIdx) => {
+      const ref = colLetter(cIdx + 1) + rowNum;
+      const v = cell.v;
+      const style = cell.style || 0;
+      // All values are inline strings (t="inlineStr") — simplest reliable approach
+      // even for numbers-as-strings, since our spreadsheet is mostly text.
+      if (v === '' || v === null || v === undefined) {
+        xml += `<c r="${ref}" s="${style}"/>`;
+      } else {
+        xml += `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(v)}</t></is></c>`;
+      }
+    });
+    xml += '</row>';
+  });
+  xml += '</sheetData>';
+
+  // <mergeCells>
+  if (merges && merges.length) {
+    xml += `<mergeCells count="${merges.length}">`;
+    merges.forEach(m => { xml += `<mergeCell ref="${m.ref}"/>`; });
+    xml += '</mergeCells>';
+  }
+
+  xml += '</worksheet>';
+  return xml;
+}
+
+function buildWorkbookXml(sheetName) {
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    '<sheets>' +
+    `<sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/>` +
+    '</sheets>' +
+    '</workbook>';
+}
+
+const CONTENT_TYPES_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+  '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+  '<Default Extension="xml" ContentType="application/xml"/>' +
+  '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+  '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+  '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+  '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>' +
+  '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>' +
+  '</Types>';
+
+const ROOT_RELS_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+  '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+  '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>' +
+  '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>' +
+  '</Relationships>';
+
+const WORKBOOK_RELS_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+  '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+  '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+  '</Relationships>';
+
+const CORE_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+  '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+  '<dc:creator>Script Converter</dc:creator>' +
+  '<cp:lastModifiedBy>Script Converter</cp:lastModifiedBy>' +
+  '</cp:coreProperties>';
+
+const APP_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+  '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">' +
+  '<Application>Script Converter</Application>' +
+  '</Properties>';
+
+// styles.xml: defines fonts, fills, borders, alignments, and cellXfs.
+// Style indices used by buildSheetXml:
+//   0 = default
+//   1 = title (bold 24pt)
+//   2 = note (wrap, top)
+//   3 = header (bold white on dark blue, centered, bordered)
+//   4 = body (wrap, top, bordered)
+//   5 = body, negative response (orange text, wrap, top, bordered)
+const STYLES_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+  '<fonts count="6">' +
+    '<font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>' +
+    '<font><b/><sz val="24"/><color rgb="FF000000"/><name val="Calibri"/></font>' +
+    '<font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>' +
+    '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>' +
+    '<font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>' +
+    '<font><sz val="11"/><color rgb="FFFF9900"/><name val="Calibri"/></font>' +
+  '</fonts>' +
+  '<fills count="3">' +
+    '<fill><patternFill patternType="none"/></fill>' +
+    '<fill><patternFill patternType="gray125"/></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill>' +
+  '</fills>' +
+  '<borders count="2">' +
+    '<border><left/><right/><top/><bottom/><diagonal/></border>' +
+    '<border>' +
+      '<left style="thin"><color rgb="FFBFBFBF"/></left>' +
+      '<right style="thin"><color rgb="FFBFBFBF"/></right>' +
+      '<top style="thin"><color rgb="FFBFBFBF"/></top>' +
+      '<bottom style="thin"><color rgb="FFBFBFBF"/></bottom>' +
+      '<diagonal/>' +
+    '</border>' +
+  '</borders>' +
+  '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+  '<cellXfs count="6">' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+    '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="5" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf>' +
+  '</cellXfs>' +
+  '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+'</styleSheet>';
 </script>
 </body>
 </html>
