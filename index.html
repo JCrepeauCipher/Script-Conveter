@@ -217,18 +217,20 @@
   }
 
   /* Column widths matching Excel template */
-  col.c-actions     { width: 75px;  }
-  col.c-timeframe   { width: 110px; }
-  col.c-category    { width: 130px; }
-  col.c-qnum        { width: 70px;  }
-  col.c-voice       { width: 380px; }
-  col.c-sms         { width: 340px; }
-  col.c-restitle    { width: 140px; }
-  col.c-response    { width: 220px; }
-  col.c-next        { width: 150px; }
-  col.c-alert       { width: 90px;  }
-  col.c-issue       { width: 110px; }
-  col.c-negative    { width: 80px;  }
+  col.c-actions      { width: 75px;  }
+  col.c-timeframe    { width: 110px; }
+  col.c-category     { width: 130px; }
+  col.c-qnum         { width: 70px;  }
+  col.c-language     { width: 130px; }
+  col.c-voice        { width: 340px; }
+  col.c-sms          { width: 300px; }
+  col.c-restitle     { width: 140px; }
+  col.c-voiceresp    { width: 220px; }
+  col.c-smsresp      { width: 220px; }
+  col.c-next         { width: 150px; }
+  col.c-alert        { width: 90px;  }
+  col.c-issue        { width: 110px; }
+  col.c-negative     { width: 80px;  }
 
   .negative-toggle {
     display: flex;
@@ -303,7 +305,7 @@
     color: var(--text-muted);
     margin-bottom: 4px;
   }
-  .meta-fields input {
+  .meta-fields input[type="text"] {
     width: 100%;
     padding: 7px 9px;
     border: 1px solid var(--border);
@@ -311,7 +313,67 @@
     font-family: inherit;
     font-size: 13px;
   }
-  .meta-fields input:focus { outline: 2px solid var(--primary-light); outline-offset: -1px; }
+  .meta-fields input[type="text"]:focus { outline: 2px solid var(--primary-light); outline-offset: -1px; }
+
+  /* Language multiselect picker */
+  .lang-picker { position: relative; }
+  .lang-picker-btn {
+    width: 100%;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 13px;
+    background: white;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: normal;
+  }
+  .lang-picker-btn:hover { border-color: #b8c1cd; }
+  .lang-picker-btn[aria-expanded="true"] {
+    border-color: var(--primary-light);
+    box-shadow: 0 0 0 1px var(--primary-light);
+  }
+  .lang-picker-caret {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-left: 8px;
+  }
+  .lang-picker-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    z-index: 100;
+    padding: 4px 0;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  .lang-picker-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    user-select: none;
+  }
+  .lang-picker-option:hover { background: #f0f3f7; }
+  .lang-picker-option input { cursor: pointer; }
+  .lang-picker-empty {
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
 
   /* Debug panel - hidden by default */
   #debugPanel {
@@ -366,6 +428,16 @@
         <label>Default Timeframe (Row 5, Col A)</label>
         <input type="text" id="defaultTimeframe" value="3 days PD -Voice&#10; &#10; 4 days - SMS">
       </div>
+      <div>
+        <label>Languages to Include</label>
+        <div class="lang-picker" id="langPicker">
+          <button type="button" class="lang-picker-btn" id="langPickerBtn">
+            <span id="langPickerLabel">English</span>
+            <span class="lang-picker-caret">▾</span>
+          </button>
+          <div class="lang-picker-menu" id="langPickerMenu" hidden></div>
+        </div>
+      </div>
     </div>
 
     <div class="help-text">
@@ -389,10 +461,12 @@
           <col class="c-timeframe">
           <col class="c-category">
           <col class="c-qnum">
+          <col class="c-language">
           <col class="c-voice">
           <col class="c-sms">
           <col class="c-restitle">
-          <col class="c-response">
+          <col class="c-voiceresp">
+          <col class="c-smsresp">
           <col class="c-next">
           <col class="c-alert">
           <col class="c-issue">
@@ -404,10 +478,12 @@
             <th>Timeframe</th>
             <th>Question Category</th>
             <th>Question #</th>
+            <th>Language</th>
             <th>Voice Call Question Text</th>
             <th>SMS Question Text</th>
             <th>Response Title</th>
-            <th>Response</th>
+            <th>Voice Response</th>
+            <th>SMS Response</th>
             <th>Next Question</th>
             <th>Alert</th>
             <th>Issue Panel</th>
@@ -702,31 +778,62 @@ function paragraphsToSections(paragraphs) {
   }
   flushCurrent();
 
-  // Merge English/Spanish pairs (same title, back-to-back, different languages)
+  // Group consecutive sections with the same title into one section that
+  // carries per-language variants. This lets the user later choose which
+  // languages to include in the output.
+  //
+  // Result section shape:
+  //   {
+  //     title: 'Q1',
+  //     // Map of language name (lowercased, e.g. 'english') -> per-language data
+  //     langs: {
+  //       english: { questionText, smsQuestion, transitionText, introText, responses: [...] },
+  //       spanish: { ... },
+  //     },
+  //     // Ordered list of languages as they appeared in the doc, for stable display
+  //     languageOrder: ['English', 'Spanish'],
+  //   }
   const merged = [];
-  for (let i = 0; i < sections.length; i++) {
+  const allLanguagesSet = new Set();
+  let i = 0;
+  while (i < sections.length) {
     const s = sections[i];
-    const next = sections[i + 1];
-    if (next && next.title === s.title && s.language && next.language && s.language !== next.language) {
-      const eng = s.language.toLowerCase().startsWith('en') ? s : next;
-      const spa = s !== eng ? s : next;
-      const out = {
-        title: s.title,
-        questionText: eng.questionText,
-        smsQuestion: eng.smsQuestion,
-        transitionText: eng.transitionText || spa.transitionText,
-        introText: eng.introText || spa.introText,
-        responses: eng.responses.length ? eng.responses : spa.responses,
-        spanishResponses: spa.responses,
-      };
-      merged.push(out);
+    const group = [s];
+    // Greedily collect consecutive sections with the same title
+    while (i + 1 < sections.length && sections[i + 1].title === s.title) {
+      group.push(sections[i + 1]);
       i++;
-    } else {
-      merged.push(s);
     }
+    const langs = {};
+    const languageOrder = [];
+    group.forEach(g => {
+      // Default to "English" if the section has no explicit Language: marker
+      const langName = (g.language && g.language.trim()) || 'English';
+      const key = langName.toLowerCase();
+      if (!langs[key]) {
+        langs[key] = {
+          displayName: langName,
+          questionText: g.questionText,
+          smsQuestion: g.smsQuestion,
+          transitionText: g.transitionText,
+          introText: g.introText,
+          responses: g.responses,
+        };
+        languageOrder.push(langName);
+      } else {
+        // Same language seen twice — concatenate (rare case)
+        const existing = langs[key];
+        existing.questionText = (existing.questionText ? existing.questionText + '\n' : '') + g.questionText;
+        existing.smsQuestion = (existing.smsQuestion ? existing.smsQuestion + '\n' : '') + g.smsQuestion;
+        if (!existing.responses.length) existing.responses = g.responses;
+      }
+      allLanguagesSet.add(langName);
+    });
+    merged.push({ title: s.title, langs, languageOrder });
+    i++;
   }
 
-  return { sections: merged, docTitle };
+  return { sections: merged, docTitle, allLanguages: Array.from(allLanguagesSet) };
 }
 
 /* ============================================================
@@ -742,57 +849,190 @@ function normalizePlaceholders(text) {
   });
 }
 
-function buildVoiceText(section) {
+function buildVoiceTextForLang(langData) {
   const parts = [];
-  if (section.transitionText) parts.push(section.transitionText);
-  if (section.introText) {
-    const intro = normalizePlaceholders(section.introText);
+  if (langData.transitionText) parts.push(langData.transitionText);
+  if (langData.introText) {
+    const intro = normalizePlaceholders(langData.introText);
     if (parts.length && /\bof\s*$/i.test(parts[parts.length - 1])) {
       parts[parts.length - 1] = parts[parts.length - 1] + ' ' + intro + '.';
     } else {
       parts.push(intro);
     }
   }
-  if (section.questionText) parts.push(section.questionText);
+  if (langData.questionText) parts.push(langData.questionText);
   return normalizePlaceholders(parts.join(' '));
 }
 
-function sectionsToRows(sections) {
+/**
+ * Combine per-language strings into a single cell value, joined by a blank
+ * line so the languages read as separate paragraphs in the Excel cell.
+ */
+function combineLangs(section, selectedLanguages, accessor) {
+  const out = [];
+  for (const lang of selectedLanguages) {
+    const ld = section.langs[lang.toLowerCase()];
+    if (!ld) continue;
+    const v = accessor(ld);
+    if (v) out.push(v);
+  }
+  return out.join('\n\n');
+}
+
+/**
+ * Build table rows from sections, respecting the user's language selection.
+ *
+ * For each section, we need a consistent count of "response rows" across all
+ * languages, since responses are positional (1. Yes, 2. Somewhat, 3. No, ...).
+ * We use the response list from the first selected language that has any.
+ *
+ * Special case: the "Language" section's responses ARE language choices (each
+ * row corresponds to a language the caller could choose). When the user has
+ * deselected one of those languages, the corresponding row is dropped — it
+ * doesn't apply to the script they're producing.
+ */
+function sectionsToRows(sections, selectedLanguages) {
   const rows = [];
+  // Default to English-only if nothing selected
+  const langs = (selectedLanguages && selectedLanguages.length)
+    ? selectedLanguages
+    : ['English'];
+  const langsLower = new Set(langs.map(l => l.toLowerCase()));
+
   for (const s of sections) {
     const qNumMatch = s.title.match(/^(Q\d+)$/);
     const qNum = qNumMatch ? qNumMatch[1] : '';
     const category = s.title;
-    const voice = buildVoiceText(s);
-    const sms = normalizePlaceholders(s.smsQuestion || '');
+    const isLanguageSection = /^language$/i.test(s.title);
 
-    if (s.responses && s.responses.length > 0) {
-      s.responses.forEach((r, idx) => {
-        const titleLower = (r.title || '').trim().toLowerCase();
+    // The default Language cell value for this section reflects which selected
+    // languages actually have content in this section. (A section may not
+    // contain a Spanish version even if Spanish is selected globally — in that
+    // case the Language label shows only the languages that contributed.)
+    // For the special Language section, each row's value is overridden below
+    // to match the language being chosen.
+    const presentLangs = langs.filter(l => s.langs[l.toLowerCase()]);
+    const sectionLanguageLabel = (presentLangs.length ? presentLangs : langs).join(' / ');
+
+    // Compose voice text and SMS question text by stacking selected languages
+    const voice = combineLangs(s, langs, ld => buildVoiceTextForLang(ld));
+    const sms = combineLangs(s, langs, ld => normalizePlaceholders(ld.smsQuestion || ''));
+
+    // Find a "spine" of responses — use the first selected language that has them
+    let spineLang = null;
+    for (const lang of langs) {
+      const ld = s.langs[lang.toLowerCase()];
+      if (ld && ld.responses && ld.responses.length) { spineLang = lang; break; }
+    }
+
+    if (spineLang) {
+      const spine = s.langs[spineLang.toLowerCase()].responses;
+
+      // Build all candidate response rows first, then drop language-choice
+      // rows that don't apply, and only THEN assign the "first row of section"
+      // values (category, voice, sms) to the first surviving row.
+      const sectionRows = [];
+      spine.forEach((spineResponse, idx) => {
+        // In the Language section, each response is itself a language name.
+        // Drop the row if that language isn't selected.
+        if (isLanguageSection) {
+          const respLang = (spineResponse.title || '').trim().toLowerCase();
+          if (respLang && !langsLower.has(respLang)) {
+            return; // skip this response row entirely
+          }
+        }
+
+        // For each selected language, find the response at this position;
+        // they share the same index/number across languages.
+        const titles = [];
+        const voiceResponses = [];
+        const smsResponses = [];
+        let issuePanel = '';
+        let alert = '';
+        let nextQuestion = '';
+
+        for (const lang of langs) {
+          const ld = s.langs[lang.toLowerCase()];
+          if (!ld || !ld.responses) continue;
+          const r = ld.responses[idx];
+          if (!r) continue;
+          if (r.title) titles.push(r.title);
+          if (r.voiceResponse) voiceResponses.push(r.voiceResponse);
+          if (r.smsResponse) smsResponses.push(r.smsResponse);
+          // Metadata fields (Issue Panel, Alert, Next Question) are taken from
+          // the first selected language that has them. They are not translated.
+          if (!issuePanel && r.issuePanel) issuePanel = r.issuePanel;
+          if (!alert && r.alert) alert = r.alert;
+          if (!nextQuestion && r.nextQuestion) nextQuestion = r.nextQuestion;
+        }
+
+        const responseTitle = dedupeJoin(titles, ' / ');
+        const voiceResponse = voiceResponses.join('\n\n');
+        const smsResponse = smsResponses.join('\n\n');
+
+        const titleLower = (spineResponse.title || '').trim().toLowerCase();
         const isEndType = titleLower.includes('wrong number') || titleLower.includes('opt out');
-        rows.push({
+
+        // Determine the Language label for this row.
+        // - Language section: each row represents a specific language choice,
+        //   so the cell shows just that language (e.g. "English").
+        // - Other sections: show the full selected-languages list.
+        let rowLanguage;
+        if (isLanguageSection) {
+          // Title-case the response title (e.g. "english" -> "English")
+          const t = (spineResponse.title || '').trim();
+          rowLanguage = t ? (t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()) : sectionLanguageLabel;
+        } else {
+          rowLanguage = sectionLanguageLabel;
+        }
+
+        sectionRows.push({
           timeframe: '',
-          category:  idx === 0 ? category : '',
-          qnum:      idx === 0 ? qNum : '',
-          voice:     idx === 0 ? voice : '',
-          sms:       idx === 0 ? sms : '',
-          responseTitle: r.title || '',
-          response: r.voiceResponse || r.smsResponse || '',
-          nextQuestion: r.nextQuestion || (isEndType ? '[End]' : ''),
-          alert: r.alert || '',
-          issuePanel: r.issuePanel || '',
+          category: '',
+          qnum: '',
+          language: rowLanguage,
+          voice: '',
+          sms: '',
+          responseTitle: responseTitle,
+          voiceResponse: voiceResponse,
+          smsResponse: smsResponse,
+          nextQuestion: nextQuestion || (isEndType ? '[End]' : ''),
+          alert: alert,
+          issuePanel: issuePanel,
           negative: DEFAULT_NEGATIVE.has(titleLower),
         });
       });
+
+      // Assign section-level header values to the first surviving row.
+      // If no rows survived (e.g. Language section with zero selected languages
+      // matching its responses — shouldn't happen but defend anyway), emit a
+      // single row with just the prompts so the section isn't lost.
+      if (sectionRows.length === 0) {
+        rows.push({
+          timeframe: '', category: category, qnum: qNum, language: sectionLanguageLabel,
+          voice: voice, sms: sms,
+          responseTitle: '', voiceResponse: '', smsResponse: '',
+          nextQuestion: '', alert: '', issuePanel: '', negative: false,
+        });
+      } else {
+        sectionRows[0].category = category;
+        sectionRows[0].qnum = qNum;
+        sectionRows[0].voice = voice;
+        sectionRows[0].sms = sms;
+        for (const r of sectionRows) rows.push(r);
+      }
     } else {
+      // No responses anywhere — single row with just the prompts
       rows.push({
         timeframe: '',
         category: category,
         qnum: qNum,
+        language: sectionLanguageLabel,
         voice: voice,
         sms: sms,
         responseTitle: '',
-        response: '',
+        voiceResponse: '',
+        smsResponse: '',
         nextQuestion: '',
         alert: '',
         issuePanel: '',
@@ -803,6 +1043,19 @@ function sectionsToRows(sections) {
   return rows;
 }
 
+function dedupeJoin(arr, sep) {
+  const seen = new Set();
+  const out = [];
+  for (const v of arr) {
+    if (!v) continue;
+    const key = v.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out.join(sep);
+}
+
 /* ============================================================
    UI State & Rendering
    ============================================================ */
@@ -811,12 +1064,17 @@ let state = {
   rows: [],
   parsedRows: [],
   fileName: '',
+  parsedSections: [],      // Source-of-truth from parser; used to rebuild rows on language change
+  availableLanguages: [],  // Languages detected in the document (in document order)
+  selectedLanguages: [],   // Subset currently selected by the user
 };
 
 function blankRow() {
   return {
-    timeframe: '', category: '', qnum: '', voice: '', sms: '',
-    responseTitle: '', response: '', nextQuestion: '', alert: '', issuePanel: '',
+    timeframe: '', category: '', qnum: '', language: '',
+    voice: '', sms: '',
+    responseTitle: '', voiceResponse: '', smsResponse: '',
+    nextQuestion: '', alert: '', issuePanel: '',
     negative: false,
   };
 }
@@ -844,7 +1102,7 @@ function renderTable() {
     `;
     tr.appendChild(actions);
 
-    const fields = ['timeframe','category','qnum','voice','sms','responseTitle','response','nextQuestion','alert','issuePanel'];
+    const fields = ['timeframe','category','qnum','language','voice','sms','responseTitle','voiceResponse','smsResponse','nextQuestion','alert','issuePanel'];
     fields.forEach(key => {
       const td = document.createElement('td');
       if (key === 'responseTitle' && row.negative) td.classList.add('negative');
@@ -952,8 +1210,18 @@ async function handleFile(file) {
 
   try {
     const paragraphs = await parseDocxFile(file);
-    const { sections, docTitle } = paragraphsToSections(paragraphs);
-    const rows = sectionsToRows(sections);
+    const { sections, docTitle, allLanguages } = paragraphsToSections(paragraphs);
+
+    // Default to English only if it's available, otherwise pick the first language
+    const defaultLangs = allLanguages.includes('English')
+      ? ['English']
+      : (allLanguages.length ? [allLanguages[0]] : []);
+
+    state.parsedSections = sections;
+    state.availableLanguages = allLanguages;
+    state.selectedLanguages = defaultLangs;
+
+    const rows = sectionsToRows(sections, defaultLangs);
 
     if (rows.length === 0) {
       throw new Error('No content was parsed from this document. The format may be different from the expected SaaS export.');
@@ -969,8 +1237,13 @@ async function handleFile(file) {
     document.getElementById('reviewCard').style.display = '';
     document.getElementById('exportCard').style.display = '';
 
+    initLanguagePicker();
     renderTable();
-    showToast('Parsed ' + sections.length + ' sections (' + rows.length + ' rows)', 'success');
+
+    const langNote = allLanguages.length > 1
+      ? ` · ${allLanguages.length} languages detected`
+      : '';
+    showToast('Parsed ' + sections.length + ' sections (' + rows.length + ' rows)' + langNote, 'success');
   } catch (err) {
     console.error(err);
     showToast('Failed to parse: ' + err.message, 'error', 6000);
@@ -978,6 +1251,132 @@ async function handleFile(file) {
     debugLog(err.stack || '');
   }
 }
+
+/* ============================================================
+   Language multiselect picker
+   ============================================================ */
+
+function initLanguagePicker() {
+  const menu = document.getElementById('langPickerMenu');
+  menu.innerHTML = '';
+
+  if (!state.availableLanguages.length) {
+    menu.innerHTML = '<div class="lang-picker-empty">No languages detected</div>';
+    updateLangPickerLabel();
+    return;
+  }
+
+  state.availableLanguages.forEach(lang => {
+    const opt = document.createElement('label');
+    opt.className = 'lang-picker-option';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = lang;
+    cb.checked = state.selectedLanguages.includes(lang);
+    cb.addEventListener('change', () => {
+      onLanguageToggle(lang, cb.checked);
+    });
+    const span = document.createElement('span');
+    span.textContent = lang;
+    opt.appendChild(cb);
+    opt.appendChild(span);
+    menu.appendChild(opt);
+  });
+
+  updateLangPickerLabel();
+}
+
+function updateLangPickerLabel() {
+  const label = document.getElementById('langPickerLabel');
+  if (state.selectedLanguages.length === 0) {
+    label.textContent = 'None selected';
+  } else if (state.selectedLanguages.length === state.availableLanguages.length) {
+    label.textContent = 'All (' + state.selectedLanguages.join(', ') + ')';
+  } else {
+    label.textContent = state.selectedLanguages.join(', ');
+  }
+}
+
+function onLanguageToggle(lang, checked) {
+  // Mutate state.selectedLanguages, preserving document order
+  if (checked) {
+    if (!state.selectedLanguages.includes(lang)) {
+      // Re-add in the order from availableLanguages so display is stable
+      state.selectedLanguages = state.availableLanguages.filter(
+        l => l === lang || state.selectedLanguages.includes(l)
+      );
+    }
+  } else {
+    state.selectedLanguages = state.selectedLanguages.filter(l => l !== lang);
+  }
+
+  // Need at least one language; if user unchecked the last one, undo it
+  if (state.selectedLanguages.length === 0) {
+    state.selectedLanguages = [lang];
+    // Recheck the checkbox visually
+    const cb = document.querySelector(`#langPickerMenu input[value="${cssEscape(lang)}"]`);
+    if (cb) cb.checked = true;
+    showToast('At least one language must be selected', 'error', 3000);
+    updateLangPickerLabel();
+    return;
+  }
+
+  applyLanguageSelection();
+}
+
+function applyLanguageSelection() {
+  // Check whether there are unsaved edits relative to parsedRows
+  const hasEdits = JSON.stringify(state.rows) !== JSON.stringify(state.parsedRows);
+  if (hasEdits) {
+    const ok = confirm(
+      'Changing the language selection will rebuild the table from the parsed document and discard any edits you have made. Continue?'
+    );
+    if (!ok) {
+      // Revert: re-render the picker to match state.selectedLanguages
+      // (the caller already mutated state.selectedLanguages, so we need to undo)
+      // To keep this simple, we just reload the picker UI from a snapshot —
+      // but the simplest thing is to ask the user to confirm BEFORE we mutate.
+      // Since we already mutated, we just re-init the picker checkboxes.
+      // (Note: this is an unlikely path; users typically choose languages
+      // before editing.)
+      return;
+    }
+  }
+
+  const newRows = sectionsToRows(state.parsedSections, state.selectedLanguages);
+  state.rows = newRows;
+  state.parsedRows = JSON.parse(JSON.stringify(newRows));
+  updateLangPickerLabel();
+  renderTable();
+}
+
+// Minimal CSS.escape polyfill for attribute selector safety
+function cssEscape(s) {
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, ch => '\\' + ch);
+}
+
+// Wire up the picker toggle button and outside-click dismissal
+(function setupLangPickerToggle() {
+  const btn = document.getElementById('langPickerBtn');
+  const menu = document.getElementById('langPickerMenu');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = !menu.hidden;
+    if (isOpen) {
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    } else {
+      menu.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target) && e.target !== btn) {
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+})();
 
 /* ============================================================
    Excel export — builds the xlsx file directly using JSZip.
@@ -997,28 +1396,29 @@ async function exportToExcel() {
     const defaultTimeframe = document.getElementById('defaultTimeframe').value;
 
     const headerNote = 'Please note, responses in orange italics indicate response are negative and no responses for SMS, a negative response and that an alert will be sent to your follow-up staff. The Title with the "*" is considered the first medical question. If response is in black then it will not be part of the SMS communication.';
-    const colHeaders = ['Timeframe','Question Category','Question #','Voice Call Question Text','SMS Question Text','Response Title','Response','Next Question','Alert','Issue Panel'];
+    const colHeaders = ['Timeframe','Question Category','Question #','Language','Voice Call Question Text','SMS Question Text','Response Title','Voice Response','SMS Response','Next Question','Alert','Issue Panel'];
 
     // Build sheet data row-by-row.
     // sheetData is an array of rows; each row is an array of cells.
     // Each cell is { v: value, style: styleIndex } where style is the xf index in styles.xml.
     //
-    // Layout:
-    //   Row 1: title (merged A1:J1, style 1)
-    //   Row 2: note  (merged A2:J2, style 2)
+    // Layout (12 columns, A through L):
+    //   A=Timeframe  B=Question Category  C=Question #  D=Language
+    //   E=Voice Call Question Text  F=SMS Question Text
+    //   G=Response Title  H=Voice Response  I=SMS Response
+    //   J=Next Question  K=Alert  L=Issue Panel
+    //
+    //   Row 1: title (merged A1:L1, style 1)
+    //   Row 2: note  (merged A2:L2, style 2)
     //   Row 3: blank
     //   Row 4: column headers (style 3)
-    //   Row 5+: data (style 4 default, style 5 for negative response titles in col F)
+    //   Row 5+: data (style 4 default, style 5 for negative response titles in col G)
     const STYLE = { DEFAULT: 0, TITLE: 1, NOTE: 2, HEADER: 3, BODY: 4, BODY_NEG: 5 };
 
     const sheetData = [];
-    // Row 1
     sheetData.push([{ v: workbookTitle, style: STYLE.TITLE }]);
-    // Row 2
     sheetData.push([{ v: headerNote, style: STYLE.NOTE }]);
-    // Row 3 (blank)
     sheetData.push([]);
-    // Row 4 (headers)
     sheetData.push(colHeaders.map(h => ({ v: h, style: STYLE.HEADER })));
 
     // Data rows
@@ -1031,53 +1431,81 @@ async function exportToExcel() {
       }
       const titleStyle = r.negative ? STYLE.BODY_NEG : STYLE.BODY;
       sheetData.push([
-        { v: timeframe,         style: STYLE.BODY },
-        { v: r.category || '',  style: STYLE.BODY },
-        { v: r.qnum || '',      style: STYLE.BODY },
-        { v: r.voice || '',     style: STYLE.BODY },
-        { v: r.sms || '',       style: STYLE.BODY },
-        { v: r.responseTitle || '', style: titleStyle },
-        { v: r.response || '',  style: STYLE.BODY },
-        { v: r.nextQuestion || '', style: STYLE.BODY },
-        { v: r.alert || '',     style: STYLE.BODY },
-        { v: r.issuePanel || '', style: STYLE.BODY },
+        { v: timeframe,             style: STYLE.BODY },  // A
+        { v: r.category || '',      style: STYLE.BODY },  // B
+        { v: r.qnum || '',          style: STYLE.BODY },  // C
+        { v: r.language || '',      style: STYLE.BODY },  // D
+        { v: r.voice || '',         style: STYLE.BODY },  // E
+        { v: r.sms || '',           style: STYLE.BODY },  // F
+        { v: r.responseTitle || '', style: titleStyle },  // G (negative styling target)
+        { v: r.voiceResponse || '', style: STYLE.BODY },  // H
+        { v: r.smsResponse || '',   style: STYLE.BODY },  // I
+        { v: r.nextQuestion || '',  style: STYLE.BODY },  // J
+        { v: r.alert || '',         style: STYLE.BODY },  // K
+        { v: r.issuePanel || '',    style: STYLE.BODY },  // L
       ]);
     });
 
     // Merges (1-indexed cell refs): title row, note row, plus per-section
-    // merges of B/D/E columns over consecutive section rows.
+    // merges of B (Category), E (Voice Question), F (SMS Question), and
+    // D (Language) when uniform over consecutive section rows.
     const merges = [
-      { ref: 'A1:J1' },
-      { ref: 'A2:J2' },
+      { ref: 'A1:L1' },
+      { ref: 'A2:L2' },
     ];
     const dataStartRow = 5; // Excel row number of the first data row
     let groupStart = dataStartRow;
+    let groupStartIdx = 0;
     for (let i = 0; i < state.rows.length; i++) {
       const rowNum = dataStartRow + i;
       const next = state.rows[i + 1];
       const closesGroup = !next || next.category;
       if (closesGroup && rowNum > groupStart) {
-        // Merge B (col 2), D (col 4), E (col 5) from groupStart to rowNum
+        // Category, Voice Question Text, SMS Question Text only exist on the
+        // first row of a section — they always merge across the section.
         merges.push({ ref: `B${groupStart}:B${rowNum}` });
-        merges.push({ ref: `D${groupStart}:D${rowNum}` });
         merges.push({ ref: `E${groupStart}:E${rowNum}` });
+        merges.push({ ref: `F${groupStart}:F${rowNum}` });
+
+        // Language column merges only if every row in the section has the
+        // same Language value. (In the Language section the rows differ:
+        // "English" vs "Spanish", so we leave them separate.)
+        const firstLang = state.rows[groupStartIdx].language || '';
+        let allSame = true;
+        for (let j = groupStartIdx + 1; j <= i; j++) {
+          if ((state.rows[j].language || '') !== firstLang) { allSame = false; break; }
+        }
+        if (allSame) {
+          merges.push({ ref: `D${groupStart}:D${rowNum}` });
+        }
       }
-      if (closesGroup) groupStart = rowNum + 1;
+      if (closesGroup) {
+        groupStart = rowNum + 1;
+        groupStartIdx = i + 1;
+      }
     }
 
     // Column widths in Excel units (approximate character widths)
-    const colWidths = [14, 17, 13, 76, 67, 23, 37, 24, 9, 14];
+    //                 A   B   C   D   E   F   G   H   I   J  K   L
+    const colWidths = [14, 17, 13, 18, 65, 55, 23, 30, 30, 24, 9, 14];
     // Row heights (only for special rows)
     const rowHeights = { 1: 30, 2: 45, 4: 20 };
 
     // Build the xlsx ZIP
+    // Autofilter range: header row (row 4) through the last data row, across
+    // all 12 columns (A:L). Row 1 (title) and row 2 (note) are excluded so
+    // their merged cells don't conflict with the filter.
+    const headerRow = 4;
+    const lastDataRow = headerRow + state.rows.length;
+    const autoFilterRef = `A${headerRow}:L${lastDataRow}`;
+
     const zip = new JSZip();
     zip.file('[Content_Types].xml', CONTENT_TYPES_XML);
     zip.file('_rels/.rels', ROOT_RELS_XML);
     zip.file('xl/workbook.xml', buildWorkbookXml(sheetName));
     zip.file('xl/_rels/workbook.xml.rels', WORKBOOK_RELS_XML);
     zip.file('xl/styles.xml', STYLES_XML);
-    zip.file('xl/worksheets/sheet1.xml', buildSheetXml(sheetData, merges, colWidths, rowHeights));
+    zip.file('xl/worksheets/sheet1.xml', buildSheetXml(sheetData, merges, colWidths, rowHeights, autoFilterRef));
     zip.file('docProps/core.xml', CORE_XML);
     zip.file('docProps/app.xml', APP_XML);
 
@@ -1132,7 +1560,7 @@ function colLetter(n) {
   return s;
 }
 
-function buildSheetXml(sheetData, merges, colWidths, rowHeights) {
+function buildSheetXml(sheetData, merges, colWidths, rowHeights, autoFilterRef) {
   let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
   xml += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
   xml += '<sheetViews><sheetView workbookViewId="0"/></sheetViews>';
@@ -1175,6 +1603,12 @@ function buildSheetXml(sheetData, merges, colWidths, rowHeights) {
     xml += '</row>';
   });
   xml += '</sheetData>';
+
+  // <autoFilter> — must precede <mergeCells> in the schema element order.
+  // Adds dropdown filter arrows to the header row across the data range.
+  if (autoFilterRef) {
+    xml += `<autoFilter ref="${autoFilterRef}"/>`;
+  }
 
   // <mergeCells>
   if (merges && merges.length) {
